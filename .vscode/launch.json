@@ -1,0 +1,9 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "Run both bots", "type": "debugpy", "request": "launch", "module": "pointsbot", "args": ["run"], "console": "integratedTerminal" },
+    { "name": "Mock console", "type": "debugpy", "request": "launch", "module": "pointsbot", "args": ["console"], "console": "integratedTerminal" },
+    { "name": "Mock demo", "type": "debugpy", "request": "launch", "module": "pointsbot", "args": ["demo"], "console": "integratedTerminal" },
+    { "name": "Check configuration", "type": "debugpy", "request": "launch", "module": "pointsbot", "args": ["check"], "console": "integratedTerminal" }
+  ]
+}
