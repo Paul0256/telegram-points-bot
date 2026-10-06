@@ -24,6 +24,9 @@ everything is done in the Google Sheet and in Telegram.
 | `active` | ☐ = the person can no longer use the bots or receive points; their history stays |
 | `comment` | Free text for yourself; the bots ignore it |
 
+If the system is later connected to another messaging platform, your technical contact will ask you to add a column
+such as `discord_id` or `slack_id`. Fill it in the same way. A person with IDs on two platforms still has one balance.
+
 ### Roles
 
 | | member | operator | admin |

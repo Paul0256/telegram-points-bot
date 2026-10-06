@@ -6,7 +6,7 @@ import threading
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
-from ..models import Role, Transaction, TxType, User
+from ..models import Identity, Role, Transaction, TxType, User
 
 
 class InMemoryStorage:
@@ -32,21 +32,22 @@ class InMemoryStorage:
             self.transactions.append(tx)
 
 
-# Fake Telegram IDs used by the demo data and the mock console.
-DEMO_ADMIN_ID = 1001
-DEMO_OPERATOR_ID = 1002
-DEMO_MEMBER_ID = 1003
-DEMO_STRANGER_ID = 9999
+# Fake Telegram identities used by the demo data and the console adapter.
+DEMO_PLATFORM = "telegram"
+DEMO_ADMIN = Identity(DEMO_PLATFORM, "1001")
+DEMO_OPERATOR = Identity(DEMO_PLATFORM, "1002")
+DEMO_MEMBER = Identity(DEMO_PLATFORM, "1003")
+DEMO_STRANGER = Identity(DEMO_PLATFORM, "9999")
 
 
 def demo_storage() -> InMemoryStorage:
     """A small, realistic data set for the mock console and the demo script."""
     users = [
-        User("Anna", Role.ADMIN, DEMO_ADMIN_ID),
-        User("Oscar", Role.OPERATOR, DEMO_OPERATOR_ID),
-        User("Mia", Role.MEMBER, DEMO_MEMBER_ID),
-        User("Leo", Role.MEMBER),  # no Telegram account: can hold points only
-        User("Nora", Role.MEMBER, 1004, allow_negative=True),
+        User("Anna", Role.ADMIN, {"telegram": DEMO_ADMIN.user_id}),
+        User("Oscar", Role.OPERATOR, {"telegram": DEMO_OPERATOR.user_id}),
+        User("Mia", Role.MEMBER, {"telegram": DEMO_MEMBER.user_id}),
+        User("Leo", Role.MEMBER),  # no messaging account: can hold points only
+        User("Nora", Role.MEMBER, {"telegram": "1004"}, allow_negative=True),
     ]
     start = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
     seed = [("Mia", 50), ("Leo", 20), ("Nora", 10)]
@@ -55,7 +56,7 @@ def demo_storage() -> InMemoryStorage:
             tx_id=f"seed-{i}",
             timestamp=start,
             bot="points",
-            operator_id=DEMO_ADMIN_ID,
+            operator_id=str(DEMO_ADMIN),
             operator_name="Anna",
             target=name,
             type=TxType.AWARD,

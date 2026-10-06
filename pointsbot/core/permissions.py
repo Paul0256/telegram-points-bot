@@ -3,7 +3,7 @@
 Matrix:
 
     action                     member  operator  admin
-    use the bots at all          yes      yes      yes   (needs telegram_id + active)
+    use the bots at all          yes      yes      yes   (needs a platform ID + active)
     award / deduct               -        yes      yes   (only types the bot allows)
     view own balance/history     yes      yes      yes
     view everyone                -        -        yes
@@ -18,7 +18,7 @@ OPERATING_ROLES = frozenset({Role.ADMIN, Role.OPERATOR})
 
 
 def can_use_bots(user: User | None) -> bool:
-    return user is not None and user.active and user.telegram_id is not None
+    return user is not None and user.active and any(user.ids.values())
 
 
 def bot_supports(bot: BotProfile, tx_type: TxType) -> bool:

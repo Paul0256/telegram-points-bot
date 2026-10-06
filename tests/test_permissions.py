@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from pointsbot import permissions
-from pointsbot.models import DEDUCT_BOT, POINTS_BOT, Role, TxType, User
-from pointsbot.service import AccessDenied, PermissionDenied
+from pointsbot.core import permissions
+from pointsbot.core.models import DEDUCT_BOT, POINTS_BOT, Identity, Role, TxType, User
+from pointsbot.core.service import AccessDenied, PermissionDenied
 
-from .conftest import ADMIN, INACTIVE, MEMBER, OPERATOR, STRANGER
+from .conftest import ADMIN, INACTIVE, MEMBER, OPERATOR, OPERATOR_ON_DISCORD, STRANGER
 
 
 @pytest.mark.parametrize(
@@ -24,19 +24,19 @@ from .conftest import ADMIN, INACTIVE, MEMBER, OPERATOR, STRANGER
     ],
 )
 def test_permission_matrix(role, bot, tx_type, allowed):
-    assert permissions.can_operate(User("X", role, 42), bot, tx_type) is allowed
+    assert permissions.can_operate(User("X", role, {"telegram": "42"}), bot, tx_type) is allowed
 
 
 def test_users_without_telegram_id_or_inactive_cannot_use_bots():
     assert not permissions.can_use_bots(None)
     assert not permissions.can_use_bots(User("Leo", Role.ADMIN))
-    assert not permissions.can_use_bots(User("Gone", Role.ADMIN, 7, active=False))
-    assert permissions.can_use_bots(User("Mia", Role.MEMBER, 3))
+    assert not permissions.can_use_bots(User("Gone", Role.ADMIN, {"telegram": "7"}, active=False))
+    assert permissions.can_use_bots(User("Mia", Role.MEMBER, {"slack": "U03"}))
 
 
 def test_only_admin_sees_everyone_and_overrides_negative():
     for role, expected in ((Role.ADMIN, True), (Role.OPERATOR, False), (Role.MEMBER, False)):
-        user = User("X", role, 1)
+        user = User("X", role, {"telegram": "1"})
         assert permissions.can_view_all(user) is expected
         assert permissions.can_override_negative(user) is expected
 
@@ -51,23 +51,23 @@ def test_role_parsing_is_lenient_about_case_and_spaces():
 def test_unknown_and_inactive_users_are_refused(service, telegram_id):
     with pytest.raises(AccessDenied) as info:
         service.authorize(telegram_id)
-    assert info.value.telegram_id == telegram_id
+    assert info.value.identity == telegram_id
 
 
 def test_member_cannot_prepare_operation(service):
     with pytest.raises(PermissionDenied):
-        service.prepare(bot=POINTS_BOT, operator_id=MEMBER, tx_type=TxType.AWARD,
+        service.prepare(bot=POINTS_BOT, operator=MEMBER, tx_type=TxType.AWARD,
                         target_query="Leo", amount=5, note="", tx_id="t1")
 
 
 def test_deduct_bot_refuses_award_even_for_admin(service):
     with pytest.raises(PermissionDenied, match="can only deduct"):
-        service.prepare(bot=DEDUCT_BOT, operator_id=ADMIN, tx_type=TxType.AWARD,
+        service.prepare(bot=DEDUCT_BOT, operator=ADMIN, tx_type=TxType.AWARD,
                         target_query="Mia", amount=5, note="", tx_id="t1")
 
 
 def test_operator_can_deduct_with_deduct_bot(service):
-    pending = service.prepare(bot=DEDUCT_BOT, operator_id=OPERATOR, tx_type=TxType.DEDUCT,
+    pending = service.prepare(bot=DEDUCT_BOT, operator=OPERATOR, tx_type=TxType.DEDUCT,
                               target_query="Mia", amount=5, note="", tx_id="t1")
     assert pending.balance_after == 45
 
@@ -93,11 +93,22 @@ def test_member_history_is_limited_to_own_transactions(service):
 
 
 def test_role_change_is_respected_at_confirmation(service, storage):
-    service.prepare(bot=POINTS_BOT, operator_id=OPERATOR, tx_type=TxType.AWARD,
+    service.prepare(bot=POINTS_BOT, operator=OPERATOR, tx_type=TxType.AWARD,
                     target_query="Mia", amount=5, note="", tx_id="t1")
     # The admin demotes the operator before they press "Yes".
-    storage.users = [User("Oper", Role.MEMBER, OPERATOR) if u.telegram_id == OPERATOR else u
+    storage.users = [User("Oper", Role.MEMBER, {"telegram": OPERATOR.user_id}) if u.matches(OPERATOR) else u
                      for u in storage.users]
     with pytest.raises(PermissionDenied):
         service.confirm("t1", OPERATOR)
     assert not storage.transaction_exists("t1")
+
+
+def test_same_person_is_recognized_on_every_platform(service):
+    assert service.authorize(OPERATOR).name == "Oper"
+    assert service.authorize(OPERATOR_ON_DISCORD).name == "Oper"
+
+
+def test_ids_are_scoped_per_platform(service):
+    # Telegram user 1 is Admin, but Discord user 1 is nobody.
+    with pytest.raises(AccessDenied):
+        service.authorize(Identity("discord", ADMIN.user_id))

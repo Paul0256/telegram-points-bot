@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from pointsbot.models import DEDUCT_BOT, POINTS_BOT, Role, TxType, User
-from pointsbot.service import (
+from pointsbot.core.models import DEDUCT_BOT, POINTS_BOT, Role, TxType, User
+from pointsbot.core.service import (
     AmbiguousPerson,
     CommitStatus,
     InsufficientBalance,
@@ -17,7 +17,7 @@ from .conftest import ADMIN, OPERATOR, award
 
 def op(service, *, tx_type=TxType.DEDUCT, target="Mia", amount=10, operator=OPERATOR,
        tx_id="t1", bot=POINTS_BOT, note=""):
-    return service.prepare(bot=bot, operator_id=operator, tx_type=tx_type, target_query=target,
+    return service.prepare(bot=bot, operator=operator, tx_type=tx_type, target_query=target,
                            amount=amount, note=note, tx_id=tx_id)
 
 
@@ -90,7 +90,7 @@ def test_invalid_amounts_are_rejected(service, amount):
 def test_person_lookup_exact_prefix_and_ambiguous(service, storage):
     assert service.find_person("  mia ").name == "Mia"
     assert service.find_person("no").name == "Nora"
-    storage.users.append(User("Mia Smith", Role.MEMBER, 77))
+    storage.users.append(User("Mia Smith", Role.MEMBER, {"telegram": "77"}))
     assert service.find_person("mia").name == "Mia"  # exact match wins over prefix
     assert service.find_person("mia s").name == "Mia Smith"
     storage.users.append(User("Leon", Role.MEMBER))

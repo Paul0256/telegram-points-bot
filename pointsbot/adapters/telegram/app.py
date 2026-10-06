@@ -1,4 +1,4 @@
-"""Run both bots in one process, sharing one PointsService.
+"""Telegram adapter entry point: run both bots in one process, sharing one PointsService.
 
 One process (instead of two) means one in-memory lock guards every write, so
 the two bots can never race each other on the same balance.
@@ -13,10 +13,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
-from ..commands import CommandHandler
-from ..config import Settings
-from ..models import DEDUCT_BOT, POINTS_BOT, BotProfile, TxType
-from ..service import PointsService
+from ...config import Settings
+from ...core import DEDUCT_BOT, POINTS_BOT, BotProfile, CommandProcessor, PointsService, TxType
 from .handlers import create_router
 
 log = logging.getLogger(__name__)
@@ -36,9 +34,9 @@ def bot_commands(profile: BotProfile) -> list[BotCommand]:
     return commands
 
 
-def build_dispatcher(command_handlers: dict[int, CommandHandler], usernames: dict[int, str]) -> Dispatcher:
-    """Dispatcher shared by both bots; handlers pick their profile by `bot.id`."""
-    dispatcher = Dispatcher(command_handlers=command_handlers, usernames=usernames)
+def build_dispatcher(processors: dict[int, CommandProcessor], usernames: dict[int, str]) -> Dispatcher:
+    """Dispatcher shared by both bots; handlers pick their core processor by `bot.id`."""
+    dispatcher = Dispatcher(processors=processors, usernames=usernames)
     dispatcher.include_router(create_router())
     return dispatcher
 
@@ -49,16 +47,16 @@ async def run_bots(settings: Settings, service: PointsService) -> None:
         (Bot(settings.deduct_bot_token, default=default), DEDUCT_BOT),
         (Bot(settings.points_bot_token, default=default), POINTS_BOT),
     ]
-    command_handlers: dict[int, CommandHandler] = {}
+    processors: dict[int, CommandProcessor] = {}
     usernames: dict[int, str] = {}
     for bot, profile in pairs:
         me = await bot.get_me()  # also validates the token
-        command_handlers[bot.id] = CommandHandler(service, profile, settings.timezone)
+        processors[bot.id] = CommandProcessor(service, profile, settings.timezone)
         usernames[bot.id] = me.username or ""
         await bot.set_my_commands(bot_commands(profile))
         log.info("%s connected as @%s", profile.title, me.username)
 
-    dispatcher = build_dispatcher(command_handlers, usernames)
+    dispatcher = build_dispatcher(processors, usernames)
     bots = [bot for bot, _ in pairs]
     try:
         # Pending updates are NOT dropped: anything sent while the bot was down

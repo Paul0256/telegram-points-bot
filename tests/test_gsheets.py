@@ -9,9 +9,9 @@ import pytest
 import requests
 from gspread.exceptions import APIError, WorksheetNotFound
 
-from pointsbot.models import DEDUCT_BOT, Role, Transaction, TxType
-from pointsbot.service import CommitStatus, PointsService
-from pointsbot.storage.gsheets import (
+from pointsbot.core.models import DEDUCT_BOT, Identity, Role, Transaction, TxType
+from pointsbot.core.service import CommitStatus, PointsService
+from pointsbot.core.storage.gsheets import (
     BALANCES_FORMULAS,
     TRANSACTIONS_HEADER,
     USERS_HEADER,
@@ -109,7 +109,7 @@ class FakeSpreadsheet:
 
 
 def make_tx(tx_id="t1", amount=10, note="") -> Transaction:
-    return Transaction(tx_id, datetime(2026, 10, 6, 9, 30, tzinfo=timezone.utc), "deduct", 2, "Oper",
+    return Transaction(tx_id, datetime(2026, 10, 6, 9, 30, tzinfo=timezone.utc), "deduct", "telegram:2", "Oper",
                        "Mia", TxType.DEDUCT, amount, note)
 
 
@@ -139,7 +139,8 @@ def test_parse_user_rows(gstorage):
     users = gstorage.list_users()
     assert [u.name for u in users] == ["Admin", "Oper", "Mia"]
     assert users[1].role is Role.OPERATOR and users[1].active and not users[1].allow_negative
-    assert users[2].telegram_id is None
+    assert users[2].ids == {}
+    assert users[0].ids == {"telegram": "1"}
     assert any("row 6" in w for w in gstorage.warnings)
 
 
@@ -149,10 +150,31 @@ def test_parse_bool(value, expected):
     assert parse_bool(value, default=False) is expected
 
 
-def test_parse_user_row_rejects_bad_telegram_id():
+def test_parse_user_row_ids():
     with pytest.raises(SheetFormatError):
-        parse_user_row(["abc", "Mia", "member"])
-    assert parse_user_row([123456789.0, "Mia", "member"]).telegram_id == 123456789
+        parse_user_row([True, "Mia", "member"])
+    assert parse_user_row([123456789.0, "Mia", "member"]).ids == {"telegram": "123456789"}
+
+
+def test_users_are_read_by_column_name_and_extra_platform_columns_work(book):
+    users_ws = book.worksheet("Users")
+    users_ws.rows = [
+        ["Name", "Role", "Telegram_ID", "discord_id", "slack_id", "active"],
+        ["Oper", "operator", 2, "8035111022", "", True],
+        ["Sam", "member", "", "", "U0SAM", True],
+    ]
+    storage = GoogleSheetsStorage(book)
+    oper, sam = storage.list_users()
+    assert oper.ids == {"telegram": "2", "discord": "8035111022"}
+    assert sam.ids == {"slack": "U0SAM"}
+    service = PointsService(storage)
+    assert service.authorize(Identity("discord", "8035111022")).name == "Oper"
+
+
+def test_users_tab_without_required_columns_is_reported(book):
+    book.worksheet("Users").rows = [["telegram_id", "who"], [1, "Anna"]]
+    with pytest.raises(SheetFormatError, match="name, role"):
+        GoogleSheetsStorage(book).list_users()
 
 
 def test_transaction_row_roundtrip():
@@ -222,10 +244,12 @@ def test_users_are_cached_briefly(book):
 
 def test_service_works_on_sheets_storage(gstorage):
     service = PointsService(gstorage)
-    service.prepare(bot=DEDUCT_BOT, operator_id=2, tx_type=TxType.DEDUCT, target_query="mia",
+    oper = Identity("telegram", "2")
+    service.prepare(bot=DEDUCT_BOT, operator=oper, tx_type=TxType.DEDUCT, target_query="mia",
                     amount=5, note="", tx_id="x1")
-    assert service.confirm("x1", 2).balance_after == 45
-    assert service.confirm("x1", 2).status is CommitStatus.DUPLICATE
+    assert service.confirm("x1", oper).balance_after == 45
+    assert service.confirm("x1", oper).status is CommitStatus.DUPLICATE
+    assert gstorage.list_transactions()[-1].operator_id == "telegram:2"
 
 
 def test_setup_on_new_spreadsheet_creates_tabs_and_admin():

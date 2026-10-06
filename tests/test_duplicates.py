@@ -4,8 +4,8 @@ import threading
 
 import pytest
 
-from pointsbot.models import DEDUCT_BOT, POINTS_BOT, TxType
-from pointsbot.service import (
+from pointsbot.core.models import DEDUCT_BOT, POINTS_BOT, TxType
+from pointsbot.core.service import (
     AlreadyProcessed,
     CommitStatus,
     NotYourOperation,
@@ -13,19 +13,18 @@ from pointsbot.service import (
     make_tx_id,
 )
 
-from .conftest import ADMIN, OPERATOR
+from .conftest import ADMIN, OPERATOR, OPERATOR_ON_DISCORD
 
 
 def prepare_deduct(service, tx_id="t1", amount=10, operator=OPERATOR):
-    return service.prepare(bot=DEDUCT_BOT, operator_id=operator, tx_type=TxType.DEDUCT,
+    return service.prepare(bot=DEDUCT_BOT, operator=operator, tx_type=TxType.DEDUCT,
                            target_query="Mia", amount=amount, note="", tx_id=tx_id)
 
 
 def test_tx_id_is_deterministic_and_unique_per_bot_and_chat():
-    assert make_tx_id("deduct", 123, 7) == make_tx_id("deduct", 123, 7) == "deduct-u123-7"
-    assert make_tx_id("deduct", -100555, 7) == "deduct-g100555-7"
-    ids = {make_tx_id(b, c, m) for b in ("deduct", "points") for c in (1, -1) for m in (1, 2)}
-    assert len(ids) == 8
+    assert make_tx_id("deduct", "tg-u123-7") == make_tx_id("deduct", "tg-u123-7") == "deduct-tg-u123-7"
+    ids = {make_tx_id(b, e) for b in ("deduct", "points") for e in ("tg-u1-1", "tg-g1-1", "dc-1")}
+    assert len(ids) == 6
 
 
 def test_double_tap_on_yes_writes_once(service, storage):
@@ -113,8 +112,22 @@ def test_storage_failure_keeps_pending_for_retry(service, storage, monkeypatch):
 def test_same_message_id_on_two_bots_are_different_transactions(service, storage):
     chat, message = 2, 50
     for bot in (DEDUCT_BOT, POINTS_BOT):
-        tx_id = make_tx_id(bot.key, chat, message)
-        service.prepare(bot=bot, operator_id=OPERATOR, tx_type=TxType.DEDUCT,
+        tx_id = make_tx_id(bot.key, f"tg-u{chat}-{message}")
+        service.prepare(bot=bot, operator=OPERATOR, tx_type=TxType.DEDUCT,
                         target_query="Mia", amount=1, note="", tx_id=tx_id)
         assert service.confirm(tx_id, OPERATOR).status is CommitStatus.CREATED
     assert len(storage.transactions) == 4
+
+
+def test_same_person_on_another_platform_cannot_confirm(service):
+    # Confirmation is bound to the exact identity that started the operation.
+    prepare_deduct(service)
+    with pytest.raises(NotYourOperation):
+        service.confirm("t1", OPERATOR_ON_DISCORD)
+
+
+def test_operation_from_another_platform_is_recorded_with_its_identity(service):
+    service.prepare(bot=DEDUCT_BOT, operator=OPERATOR_ON_DISCORD, tx_type=TxType.DEDUCT,
+                    target_query="Mia", amount=1, note="", tx_id="dc")
+    tx = service.confirm("dc", OPERATOR_ON_DISCORD).transaction
+    assert tx.operator_id == "discord:8035111022" and tx.operator_name == "Oper"

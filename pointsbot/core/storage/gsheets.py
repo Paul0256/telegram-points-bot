@@ -2,7 +2,7 @@
 
 Sheet layout (created by `python -m pointsbot setup-sheet`):
 
-    Users         telegram_id | name | role | allow_negative | active | comment
+    Users         telegram_id | name | role | allow_negative | active | comment [| discord_id | slack_id ...]
     Transactions  tx_id | timestamp_utc | bot | operator_id | operator_name | target | type | amount | note
     Balances      name | balance | awarded | deducted | transactions   (formulas only)
 
@@ -35,6 +35,9 @@ TRANSACTIONS_SHEET = "Transactions"
 BALANCES_SHEET = "Balances"
 
 USERS_HEADER = ["telegram_id", "name", "role", "allow_negative", "active", "comment"]
+# Any Users column called "<platform>_id" holds that platform's user IDs, so a
+# new messaging platform needs a new column, not a code change in the core.
+ID_COLUMN_SUFFIX = "_id"
 TRANSACTIONS_HEADER = [
     "tx_id",
     "timestamp_utc",
@@ -95,24 +98,43 @@ def _pad(row: Sequence[Any], length: int) -> list[Any]:
     return list(row) + [""] * (length - len(row))
 
 
-def parse_user_row(row: Sequence[Any]) -> User | None:
-    """Return None for empty rows; raise SheetFormatError for broken ones."""
-    telegram_id, name, role, allow_negative, active, *_ = _pad(row, len(USERS_HEADER))
+def parse_platform_id(value: Any) -> str:
+    """Sheet cell -> platform user ID string ("" if empty). 123456789.0 -> "123456789"."""
+    if isinstance(value, bool):
+        raise SheetFormatError(f"expected a user ID, got {value!r}")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return "" if value is None else str(value).strip()
+
+
+def parse_user_row(row: Sequence[Any], header: Sequence[str] = USERS_HEADER) -> User | None:
+    """Parse one Users row by column *name*. None for empty rows; SheetFormatError for broken ones."""
+    cells = dict(zip(header, _pad(row, len(header)), strict=False))
+    name = cells.get("name")
     name = "" if name is None else str(name)
     if not name.strip():
         return None
     try:
-        parsed_role = Role.parse(role)
+        parsed_role = Role.parse(cells.get("role", ""))
     except ValueError as exc:
         raise SheetFormatError(str(exc)) from None
-    tid = None if str(telegram_id).strip() == "" else parse_int(telegram_id, "telegram_id")
+    ids = {}
+    for column, value in cells.items():
+        if column.endswith(ID_COLUMN_SUFFIX) and column != ID_COLUMN_SUFFIX:
+            user_id = parse_platform_id(value)
+            if user_id:
+                ids[column[: -len(ID_COLUMN_SUFFIX)]] = user_id
     return User(
         name=name,
         role=parsed_role,
-        telegram_id=tid,
-        allow_negative=parse_bool(allow_negative, default=False),
-        active=parse_bool(active, default=True),
+        ids=ids,
+        allow_negative=parse_bool(cells.get("allow_negative"), default=False),
+        active=parse_bool(cells.get("active"), default=True),
     )
+
+
+def normalize_header(row: Sequence[Any]) -> list[str]:
+    return [str(cell).strip().lower() for cell in row]
 
 
 def transaction_to_row(tx: Transaction) -> list[Any]:
@@ -158,7 +180,7 @@ def parse_transaction_row(row: Sequence[Any]) -> Transaction | None:
         tx_id=str(tx_id).strip(),
         timestamp=parse_timestamp(ts),
         bot=str(bot),
-        operator_id=parse_int(operator_id, "operator_id"),
+        operator_id=parse_platform_id(operator_id),
         operator_name=str(operator_name),
         target=str(target),
         type=parsed_type,
@@ -231,7 +253,11 @@ class GoogleSheetsStorage:
                 rows = self._retry(
                     lambda: self.users_ws.get_all_values(value_render_option=ValueRenderOption.unformatted)
                 )
-                self._users = self._parse_rows(rows, parse_user_row, USERS_SHEET)
+                header = normalize_header(rows[0]) if rows else []
+                missing = [c for c in ("name", "role") if c not in header]
+                if missing:
+                    raise SheetFormatError(f"{USERS_SHEET} tab is missing the column(s): {', '.join(missing)}")
+                self._users = self._parse_rows(rows, lambda row: parse_user_row(row, header), USERS_SHEET)
                 self._users_loaded_at = self._monotonic()
             return list(self._users)
 

@@ -4,11 +4,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from pointsbot.models import Role, Transaction, TxType, User
-from pointsbot.service import PointsService
-from pointsbot.storage.memory import InMemoryStorage
+from pointsbot.core.models import Identity, Role, Transaction, TxType, User
+from pointsbot.core.service import PointsService
+from pointsbot.core.storage.memory import InMemoryStorage
 
-ADMIN, OPERATOR, MEMBER, INACTIVE, STRANGER = 1, 2, 3, 4, 999
+ADMIN, OPERATOR, MEMBER, INACTIVE, STRANGER = (Identity("telegram", str(i)) for i in (1, 2, 3, 4, 999))
+OPERATOR_ON_DISCORD = Identity("discord", "8035111022")
+
+
+def tg(identity: Identity) -> dict[str, str]:
+    return {"telegram": identity.user_id}
 
 
 class FakeClock:
@@ -27,7 +32,7 @@ def award(target: str, amount: int, tx_id: str) -> Transaction:
         tx_id=tx_id,
         timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
         bot="points",
-        operator_id=ADMIN,
+        operator_id=str(ADMIN),
         operator_name="Admin",
         target=target,
         type=TxType.AWARD,
@@ -38,12 +43,12 @@ def award(target: str, amount: int, tx_id: str) -> Transaction:
 @pytest.fixture
 def users() -> list[User]:
     return [
-        User("Admin", Role.ADMIN, ADMIN),
-        User("Oper", Role.OPERATOR, OPERATOR),
-        User("Mia", Role.MEMBER, MEMBER),
-        User("Gone", Role.OPERATOR, INACTIVE, active=False),
-        User("Leo", Role.MEMBER),  # no Telegram ID
-        User("Nora", Role.MEMBER, 5, allow_negative=True),
+        User("Admin", Role.ADMIN, tg(ADMIN)),
+        User("Oper", Role.OPERATOR, {"telegram": OPERATOR.user_id, "discord": OPERATOR_ON_DISCORD.user_id}),
+        User("Mia", Role.MEMBER, tg(MEMBER)),
+        User("Gone", Role.OPERATOR, tg(INACTIVE), active=False),
+        User("Leo", Role.MEMBER),  # no messaging account
+        User("Nora", Role.MEMBER, {"telegram": "5"}, allow_negative=True),
     ]
 
 

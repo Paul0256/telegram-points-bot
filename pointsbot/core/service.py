@@ -1,13 +1,13 @@
 """Core business logic: authorization, two-step operations, balances, history.
 
-The service is transport-agnostic (no Telegram, no Google imports) and
-synchronous, which keeps it easy to test. The Telegram layer calls it from a
-worker thread.
+The service knows nothing about messaging platforms: callers are identified
+by an `Identity` (platform + user ID). It is synchronous, which keeps it easy
+to test; async adapters call it from a worker thread.
 
 Duplicate protection works on two levels:
 
-1. Every operation gets a deterministic ID derived from the Telegram update
-   that started it (bot + chat + message). Re-delivered updates and repeated
+1. Every operation gets a deterministic ID derived from the platform event
+   that started it (bot + adapter event ID). Re-delivered events and repeated
    "Yes" taps therefore map to the same ID, and an ID that already exists in
    the "Transactions" sheet is never written again.
 2. A process-wide lock serializes confirmation, so two concurrent taps cannot
@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from . import permissions
-from .models import BotProfile, Transaction, TxType, User, normalize_name
+from .models import BotProfile, Identity, Transaction, TxType, User, normalize_name
 from .storage.base import Storage
 
 log = logging.getLogger(__name__)
@@ -41,11 +41,11 @@ class PointsError(Exception):
 
 
 class AccessDenied(PointsError):
-    """The Telegram user is not an active entry in the "Users" sheet."""
+    """The sender is not an active entry in the "Users" sheet."""
 
-    def __init__(self, telegram_id: int):
+    def __init__(self, identity: Identity):
         super().__init__("You don't have access to this bot.")
-        self.telegram_id = telegram_id
+        self.identity = identity
 
 
 class PermissionDenied(PointsError):
@@ -80,7 +80,7 @@ class InsufficientBalance(PointsError):
 
 
 class AlreadyProcessed(PointsError):
-    """The update that started this operation was already turned into a transaction."""
+    """The event that started this operation was already turned into a transaction."""
 
     def __init__(self, tx_id: str):
         self.tx_id = tx_id
@@ -106,7 +106,8 @@ class PendingOperation:
 
     tx_id: str
     bot: BotProfile
-    operator: User
+    operator: Identity
+    operator_name: str
     target: User
     type: TxType
     amount: int
@@ -153,14 +154,13 @@ def compute_balances(transactions: Iterable[Transaction]) -> dict[str, int]:
     return dict(balances)
 
 
-def make_tx_id(bot_key: str, chat_id: int, message_id: int) -> str:
-    """Deterministic transaction ID for the Telegram message that started an operation.
+def make_tx_id(bot_key: str, event_id: str) -> str:
+    """Deterministic transaction ID: bot + the adapter's stable event ID.
 
-    The bot key is part of the ID because in private chats both bots see the
-    same chat ID and number their messages independently.
+    The bot key is part of the ID because two bots may see events with equal
+    IDs (e.g. Telegram numbers messages per chat, separately for each bot).
     """
-    chat = f"g{-chat_id}" if chat_id < 0 else f"u{chat_id}"
-    return f"{bot_key}-{chat}-{message_id}"
+    return f"{bot_key}-{event_id}"
 
 
 def clean_note(note: str) -> str:
@@ -189,17 +189,14 @@ class PointsService:
 
     # ---- users -------------------------------------------------------------
 
-    def find_user(self, telegram_id: int) -> User | None:
-        for user in self.storage.list_users():
-            if user.telegram_id == telegram_id:
-                return user
-        return None
+    def find_user(self, identity: Identity) -> User | None:
+        return next((u for u in self.storage.list_users() if u.matches(identity)), None)
 
-    def authorize(self, telegram_id: int) -> User:
-        """Return the active user for this Telegram ID or raise AccessDenied."""
-        user = self.find_user(telegram_id)
+    def authorize(self, identity: Identity) -> User:
+        """Return the active user for this platform identity or raise AccessDenied."""
+        user = self.find_user(identity)
         if not permissions.can_use_bots(user):
-            raise AccessDenied(telegram_id)
+            raise AccessDenied(identity)
         return user
 
     def find_person(self, query: str) -> User:
@@ -231,7 +228,7 @@ class PointsService:
         self,
         *,
         bot: BotProfile,
-        operator_id: int,
+        operator: Identity,
         tx_type: TxType,
         target_query: str,
         amount: int,
@@ -241,17 +238,17 @@ class PointsService:
         """Validate an award/deduct and park it until the operator confirms."""
         with self._lock:
             self._purge_expired()
-            operator = self.authorize(operator_id)
+            operator_user = self.authorize(operator)
             if not permissions.bot_supports(bot, tx_type):
                 raise PermissionDenied(
                     f"The {bot.title} can only {self._allowed_verbs(bot)} points."
                 )
-            if not permissions.can_operate(operator, bot, tx_type):
-                raise PermissionDenied(f"Your role ({operator.role.value}) cannot {tx_type.value} points.")
+            if not permissions.can_operate(operator_user, bot, tx_type):
+                raise PermissionDenied(f"Your role ({operator_user.role.value}) cannot {tx_type.value} points.")
 
             existing = self._pending.get(tx_id)
             if existing is not None:
-                # Telegram re-delivered the same update: show the same confirmation.
+                # The platform re-delivered the same event: show the same confirmation.
                 return existing
 
             transactions = self.storage.list_transactions()
@@ -266,6 +263,7 @@ class PointsService:
                 tx_id=tx_id,
                 bot=bot,
                 operator=operator,
+                operator_name=operator_user.name,
                 target=target,
                 type=tx_type,
                 amount=amount,
@@ -275,14 +273,14 @@ class PointsService:
                 requires_override=False,
             )
             if pending.balance_after < 0 and not target.allow_negative:
-                if not permissions.can_override_negative(operator):
+                if not permissions.can_override_negative(operator_user):
                     raise InsufficientBalance(target.name, balance, amount)
                 pending = replace(pending, requires_override=True)
 
             self._pending[tx_id] = pending
             return pending
 
-    def confirm(self, tx_id: str, operator_id: int, *, allow_negative: bool = False) -> CommitResult:
+    def confirm(self, tx_id: str, operator: Identity, *, allow_negative: bool = False) -> CommitResult:
         """Write a pending operation. Safe to call any number of times."""
         with self._lock:
             pending = self._pending.get(tx_id)
@@ -292,13 +290,13 @@ class PointsService:
                 if existing is not None:
                     return CommitResult(CommitStatus.DUPLICATE, existing, None)
                 raise PendingNotFound()
-            if pending.operator.telegram_id != operator_id:
+            if pending.operator != operator:
                 raise NotYourOperation()
 
             # Re-validate with fresh data: roles, people and balances may have
             # changed while the confirmation was waiting.
-            operator = self.authorize(operator_id)
-            if not permissions.can_operate(operator, pending.bot, pending.type):
+            operator_user = self.authorize(operator)
+            if not permissions.can_operate(operator_user, pending.bot, pending.type):
                 self._pending.pop(tx_id, None)
                 raise PermissionDenied("You are no longer allowed to perform this operation.")
 
@@ -318,7 +316,7 @@ class PointsService:
             balance = compute_balances(transactions).get(target.key, 0)
             balance_after = balance + pending.signed_amount
             if balance_after < 0 and not target.allow_negative:
-                if not (allow_negative and permissions.can_override_negative(operator)):
+                if not (allow_negative and permissions.can_override_negative(operator_user)):
                     self._pending.pop(tx_id, None)
                     raise InsufficientBalance(target.name, balance, pending.amount)
 
@@ -326,8 +324,8 @@ class PointsService:
                 tx_id=tx_id,
                 timestamp=self._clock(),
                 bot=pending.bot.key,
-                operator_id=operator_id,
-                operator_name=operator.name,
+                operator_id=str(operator),
+                operator_name=operator_user.name,
                 target=target.name,
                 type=pending.type,
                 amount=pending.amount,
@@ -343,13 +341,13 @@ class PointsService:
             )
             return CommitResult(CommitStatus.CREATED, tx, balance_after)
 
-    def cancel(self, tx_id: str, operator_id: int) -> bool:
+    def cancel(self, tx_id: str, operator: Identity) -> bool:
         """Drop a pending operation. Returns False if there was nothing to cancel."""
         with self._lock:
             pending = self._pending.get(tx_id)
             if pending is None:
                 return False
-            if pending.operator.telegram_id != operator_id:
+            if pending.operator != operator:
                 raise NotYourOperation()
             del self._pending[tx_id]
             return True
@@ -360,9 +358,9 @@ class PointsService:
 
     # ---- read-only queries ----------------------------------------------------
 
-    def balance_report(self, viewer_id: int, person_query: str | None = None) -> BalanceReport:
+    def balance_report(self, viewer_identity: Identity, person_query: str | None = None) -> BalanceReport:
         """Own balance for everyone; all balances (or anyone's) for admins."""
-        viewer = self.authorize(viewer_id)
+        viewer = self.authorize(viewer_identity)
         balances = compute_balances(self.storage.list_transactions())
         if person_query:
             person = self.find_person(person_query)
@@ -374,13 +372,13 @@ class PointsService:
             return BalanceReport([(u.name, balances.get(u.key, 0)) for u in people], everyone=True)
         return BalanceReport([(viewer.name, balances.get(viewer.key, 0))], everyone=False)
 
-    def history(self, viewer_id: int, person_query: str | None = None, limit: int = 10) -> list[Transaction]:
+    def history(self, viewer_identity: Identity, person_query: str | None = None, limit: int = 10) -> list[Transaction]:
         """Newest-first transactions the viewer is allowed to see.
 
         Non-admins see transactions where they are the target or the operator.
         Admins see everything, or one person's transactions.
         """
-        viewer = self.authorize(viewer_id)
+        viewer = self.authorize(viewer_identity)
         transactions = self.storage.list_transactions()
         if person_query:
             person = self.find_person(person_query)
@@ -392,7 +390,7 @@ class PointsService:
         else:
             visible = [
                 t for t in transactions
-                if normalize_name(t.target) == viewer.key or t.operator_id == viewer.telegram_id
+                if normalize_name(t.target) == viewer.key or normalize_name(t.operator_name) == viewer.key
             ]
         # Rows are appended chronologically, so the sheet order is the time order.
         return visible[::-1][:limit]
