@@ -334,6 +334,7 @@ BALANCES_FORMULAS = [
 ]
 PROTECTION_NOTE = "Managed by the points bots. Do not edit by hand."
 DEFAULT_SHEET_NAMES = {"sheet1", "lapas1", "лист1"}
+OUR_TABS = {USERS_SHEET, TRANSACTIONS_SHEET, BALANCES_SHEET}
 
 
 class SetupError(RuntimeError):
@@ -344,11 +345,18 @@ def setup_spreadsheet(spreadsheet: gspread.Spreadsheet, admin: tuple[int, str] |
     """Create/verify the three tabs. Safe to run repeatedly; never deletes data."""
     done: list[str] = []
     existing = {ws.title: ws for ws in spreadsheet.worksheets()}
+    # A brand-new spreadsheet has one empty tab whose name depends on the UI
+    # language ("Sheet1", "Lapas1", ...); reuse it instead of leaving it behind.
+    only_tab = next(iter(existing.values())) if len(existing) == 1 else None
 
     def ensure(title: str, header: list[str], cols: int) -> gspread.Worksheet:
         ws = existing.get(title)
         if ws is None:
-            spare = [w for t, w in existing.items() if t.lower() in DEFAULT_SHEET_NAMES and not w.get_all_values()]
+            spare = [
+                w
+                for t, w in existing.items()
+                if t not in OUR_TABS and (t.lower() in DEFAULT_SHEET_NAMES or w is only_tab) and not w.get_all_values()
+            ]
             if spare:
                 ws = spare[0]
                 del existing[ws.title]
@@ -383,13 +391,29 @@ def setup_spreadsheet(spreadsheet: gspread.Spreadsheet, admin: tuple[int, str] |
     )
     done.append("Added role drop-down, checkboxes and edit warnings")
 
-    if admin is not None and len(users.get_all_values()) <= 1:
-        telegram_id, name = admin
-        users.append_row(
-            [telegram_id, name, "admin", False, True, "created by setup"], value_input_option=ValueInputOption.raw
-        )
-        done.append(f"Added first admin {name} ({telegram_id})")
+    if admin is not None:
+        done.append(_add_first_admin(users, admin))
     return done
+
+
+def _add_first_admin(users: gspread.Worksheet, admin: tuple[int, str]) -> str:
+    """Write the admin into the first row without a name.
+
+    Checkbox columns make Google fill empty rows with FALSE, so "is the tab
+    empty?" must look at the name column, and append_row would land after
+    row 1000. Writing to an explicit row avoids both.
+    """
+    telegram_id, name = admin
+    rows = users.get_all_values()
+    named = [r for r in rows[1:] if len(r) > 1 and str(r[1]).strip()]
+    if any(str(r[0]).strip() == str(telegram_id) for r in named):
+        return f"Admin {telegram_id} is already in Users"
+    if named:
+        return "Users already has people; add yourself as admin by hand if needed"
+    users.update(
+        [[telegram_id, name, "admin", False, True, "created by setup"]], "A2", value_input_option=ValueInputOption.raw
+    )
+    return f"Added first admin {name} ({telegram_id})"
 
 
 def _validation_requests(users_sheet_id: int) -> list[dict[str, Any]]:

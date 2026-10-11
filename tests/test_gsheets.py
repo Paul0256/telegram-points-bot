@@ -64,8 +64,10 @@ class FakeWorksheet:
 
     def update(self, values, range_name=None, **kwargs):
         self.updates.append((range_name, values, kwargs.get("value_input_option")))
-        if range_name == "A1":
-            self.rows[:1] = [list(values[0])]
+        if range_name and range_name[0] == "A" and range_name[1:].isdigit():
+            row = int(range_name[1:]) - 1
+            self.rows.extend([] for _ in range(row + 1 - len(self.rows)))
+            self.rows[row] = list(values[0])
 
     def update_title(self, title):
         self.title = title
@@ -256,14 +258,16 @@ def test_setup_on_new_spreadsheet_creates_tabs_and_admin():
     book = FakeSpreadsheet([FakeWorksheet("Sheet1")])
     steps = setup_spreadsheet(book, admin=(555, "Paulius"))
     assert [ws.title for ws in book.sheets] == ["Users", "Transactions", "Balances"]
-    assert book.worksheet("Users").rows == [USERS_HEADER, [555, "Paulius", "admin", False, True, "created by setup"]]
+    admin_row = [555, "Paulius", "admin", False, True, "created by setup"]
+    assert book.worksheet("Users").rows[:2] == [USERS_HEADER, admin_row]
     assert book.worksheet("Transactions").rows == [TRANSACTIONS_HEADER]
     assert book.worksheet("Balances").updates[-1] == ("A2", [BALANCES_FORMULAS], "USER_ENTERED")
     assert any("first admin" in s for s in steps)
 
     # Running it again changes nothing important and adds no second protection.
-    setup_spreadsheet(book, admin=(555, "Paulius"))
+    steps = setup_spreadsheet(book, admin=(555, "Paulius"))
     assert len(book.worksheet("Users").rows) == 2
+    assert "Admin 555 is already in Users" in steps
     assert all(len(v) == 1 for v in book.protected.values()) and len(book.protected) == 2
 
 
@@ -271,3 +275,28 @@ def test_setup_refuses_foreign_headers():
     book = FakeSpreadsheet([FakeWorksheet("Users", [["id", "who"]])])
     with pytest.raises(SetupError):
         setup_spreadsheet(book)
+
+
+class CheckboxFakeSpreadsheet(FakeSpreadsheet):
+    """Like Google: checkbox validation fills empty rows of D:E with FALSE."""
+
+    def batch_update(self, body):
+        super().batch_update(body)
+        users = self.worksheet("Users")
+        while len(users.rows) < 20:
+            users.rows.append(["", "", "", False, False, ""])
+
+
+def test_setup_adds_admin_although_checkboxes_filled_rows_with_false():
+    book = CheckboxFakeSpreadsheet([FakeWorksheet("Lapas 1")])  # any name: the only empty tab is reused
+    steps = setup_spreadsheet(book, admin=(1492662055, "Paulius"))
+    assert [ws.title for ws in book.sheets] == ["Users", "Transactions", "Balances"]
+    assert book.worksheet("Users").rows[1][:3] == [1492662055, "Paulius", "admin"]
+    assert "Added first admin Paulius (1492662055)" in steps
+    assert [u.name for u in GoogleSheetsStorage(book).list_users()] == ["Paulius"]
+
+
+def test_setup_does_not_rename_a_tab_with_data():
+    book = FakeSpreadsheet([FakeWorksheet("Budget", [["a", "b"]])])
+    setup_spreadsheet(book)
+    assert [ws.title for ws in book.sheets] == ["Budget", "Users", "Transactions", "Balances"]
