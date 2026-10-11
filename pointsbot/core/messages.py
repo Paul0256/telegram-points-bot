@@ -135,6 +135,7 @@ def parse_command_text(text: str) -> tuple[str, str | None, str] | None:
     text = text.strip()
     if not text.startswith("/") or len(text) < 2:
         return None
-    head, _, rest = text.partition(" ")
+    head, *rest_parts = text.split(maxsplit=1)  # any whitespace, newlines included
+    rest = rest_parts[0] if rest_parts else ""
     command, _, mention = head[1:].partition("@")
     return command.lower(), (mention or None), rest.strip()

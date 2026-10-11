@@ -73,6 +73,13 @@ class UsageError(PointsError):
 
 def parse_operation_args(args: str, tx_type: TxType) -> OperationArgs:
     """Parse "<person name> <amount> [note]". Names may contain spaces."""
+    if len([line for line in args.splitlines() if line.strip()]) > 1:
+        # Usually several commands pasted into one message; recording only the
+        # first one (with the rest as its note) would be silently wrong.
+        raise UsageError(
+            "Please send one command per message. Nothing was recorded.\n"
+            f"Example: /{tx_type.value} Anna 10 great work"
+        )
     usage = f"Usage: /{tx_type.value} <name> <amount> [note]\nExample: /{tx_type.value} Anna 10 great work"
     tokens = args.split()
     index = next((i for i, tok in enumerate(tokens) if i > 0 and _NUMBER.match(tok)), None)

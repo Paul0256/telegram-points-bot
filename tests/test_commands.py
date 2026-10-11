@@ -117,3 +117,14 @@ def test_scripted_demo_runs_and_records_expected_rows(capsys):
     out = capsys.readouterr().out
     assert "Traceback" not in out and "Something went wrong" not in out
     assert len(session.service.storage.list_transactions()) == 5  # 3 seed rows + 2 confirmed
+
+
+def test_several_commands_in_one_message_are_refused(service, storage):
+    text = "/award Mia 10 first\n/award Leo 5 second"
+    response = CommandProcessor(service, POINTS_BOT).handle_command(command(OPERATOR, text))
+    assert "one command per message" in response.plain and not response.buttons
+    assert len(storage.transactions) == 2  # only the seed rows
+
+
+def test_command_name_ends_at_any_whitespace():
+    assert parse_command_text("/award\nMia 5") == ("award", None, "Mia 5")
