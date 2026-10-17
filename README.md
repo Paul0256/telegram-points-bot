@@ -8,6 +8,16 @@ single source of truth. Every operation is confirmed, logged and duplicate-proof
 | **Bot #1 — Deduct bot** | deduct points only |
 | **Bot #2 — Points bot** | award **and** deduct points |
 
+![Telegram bot and Google Sheet in sync](docs/images/bot-and-sheet.png)
+
+<details>
+<summary>More screenshots</summary>
+
+![Balances computed by formulas](docs/images/balances.png)
+![Access control, negative-balance guard and tests](docs/images/safety-and-tests.png)
+
+</details>
+
 **Features**
 
 - **Access control:** only people listed in the `Users` sheet can use the bots. Their role (`admin`, `operator`, `member`) decides what they may do. Everyone else gets a polite refusal that includes their Telegram ID, so they can send it to the administrator.
@@ -17,7 +27,7 @@ single source of truth. Every operation is confirmed, logged and duplicate-proof
 - **No accidental negative balances:** a deduction that would go below zero is refused. An admin can explicitly allow it, either per person (`allow_negative`) or per operation with a "Yes, allow negative" button.
 - **MOCK mode:** an in-memory sheet plus a terminal chat simulator, so everything can be tried without Google or Telegram.
 - **Platform-independent core:** permissions, points logic, duplicate protection and Google Sheets access live in a core package that never imports Telegram code. Telegram is just one thin adapter, so Discord, Slack or WhatsApp adapters can be added without touching the core (see [How to add another platform](#how-to-add-another-platform)).
-- **Tests:** 100 pytest tests covering permissions, duplicates, balances, the Sheets mapping, the Telegram adapter and the core/adapter boundary.
+- **Tests:** 105 pytest tests covering permissions, duplicates, balances, the Sheets mapping, the Telegram adapter and the core/adapter boundary.
 
 ---
 
