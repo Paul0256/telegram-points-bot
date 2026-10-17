@@ -300,3 +300,12 @@ def test_setup_does_not_rename_a_tab_with_data():
     book = FakeSpreadsheet([FakeWorksheet("Budget", [["a", "b"]])])
     setup_spreadsheet(book)
     assert [ws.title for ws in book.sheets] == ["Budget", "Users", "Transactions", "Balances"]
+
+
+def test_balances_formulas_survive_row_deletion():
+    # Ranges that start at row 2 get rewritten by Google Sheets when rows 2..n
+    # are deleted; whole-column references do not.
+    import re
+
+    for formula in BALANCES_FORMULAS:
+        assert not re.search(r"(Transactions|Users)![A-Z]+2:", formula), formula

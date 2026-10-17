@@ -188,7 +188,7 @@ Names can contain spaces and are case-insensitive. A unique prefix is enough: `/
 - **Resilience:** transient Google errors (rate limits, 5xx, network) are retried with backoff. Before each retried append, the code checks whether the previous attempt actually landed, so a lost response cannot create a duplicate row. If Google stays down, the operator gets a pop-up and can press Yes again later.
 - **Safety:** values are written with `valueInputOption=RAW`, so a note such as `=IMPORTXML(...)` is stored as text, never as a formula. Adapters escape all user text when rendering replies (HTML for Telegram).
 - **Balances** are computed in Python from `Transactions` for the below-zero check, and by these formulas for humans:
-  `=BYROW(A2:A, LAMBDA(n, IF(n="", "", SUMIFS(Transactions!H2:H, Transactions!F2:F, n, Transactions!G2:G, "award") - SUMIFS(…, "deduct"))))`
+  `=BYROW(A2:A, LAMBDA(n, IF(n="", "", SUMIFS(Transactions!H:H, Transactions!F:F, n, Transactions!G:G, "award") - SUMIFS(…, "deduct"))))`
 
 ### Project structure
 

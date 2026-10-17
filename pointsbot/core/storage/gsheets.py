@@ -324,13 +324,17 @@ def open_spreadsheet(service_account_file: Path | str, spreadsheet_id: str, time
 
 # Formulas use English function names and commas, which the Sheets API accepts
 # regardless of the spreadsheet's locale.
-_SUM = 'SUMIFS(Transactions!H2:H, Transactions!F2:F, n, Transactions!G2:G, "{type}")'
+# Whole-column references (H:H, not H2:H): Google Sheets rewrites a range
+# like H2:H when its first rows are deleted, which silently zeroed every
+# balance. Header rows never match a person's name or a type, so they are
+# harmless inside whole columns.
+_SUM = 'SUMIFS(Transactions!H:H, Transactions!F:F, n, Transactions!G:G, "{type}")'
 BALANCES_FORMULAS = [
-    '=IFERROR(SORT(UNIQUE(FILTER(Users!B2:B, Users!B2:B<>""))), "")',
+    '=IFERROR(SORT(UNIQUE(FILTER(Users!B:B, Users!B:B<>"", ROW(Users!B:B)>1))), "")',
     f'=BYROW(A2:A, LAMBDA(n, IF(n="", "", {_SUM.format(type="award")} - {_SUM.format(type="deduct")})))',
     f'=BYROW(A2:A, LAMBDA(n, IF(n="", "", {_SUM.format(type="award")})))',
     f'=BYROW(A2:A, LAMBDA(n, IF(n="", "", {_SUM.format(type="deduct")})))',
-    '=BYROW(A2:A, LAMBDA(n, IF(n="", "", COUNTIF(Transactions!F2:F, n))))',
+    '=BYROW(A2:A, LAMBDA(n, IF(n="", "", COUNTIF(Transactions!F:F, n))))',
 ]
 PROTECTION_NOTE = "Managed by the points bots. Do not edit by hand."
 DEFAULT_SHEET_NAMES = {"sheet1", "lapas1", "лист1"}
